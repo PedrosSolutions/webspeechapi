@@ -1,4 +1,6 @@
 const STORAGE_KEY = 'chat_messages';
+const MAX_INPUT_LENGTH = 2000;
+const MAX_TEXTAREA_HEIGHT = 140;
 
 const chatHistory = document.getElementById('chatHistory');
 const emptyState  = document.getElementById('emptyState');
@@ -12,13 +14,19 @@ const btnClear = document.getElementById('btnClear');
 function loadMessages() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-  } catch {
+  } catch (err) {
+    console.error('Failed to load or parse chat messages from localStorage:', err);
     return [];
   }
 }
 
 function saveMessages(messages) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+  } catch (e) {
+    console.error('Failed to save messages to localStorage.', e);
+    alert('Nelze uložit zprávy: úložiště prohlížeče je plné nebo nedostupné.');
+  }
 }
 
 // --- Rendering ---
@@ -74,14 +82,24 @@ function scrollToBottom() {
   chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
+// --- ID generation ---
+
+function generateMessageId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+}
+
 // --- Sending ---
 
 function sendMessage() {
   const text = messageInput.value.trim();
   if (!text) return;
+  if (text.length > MAX_INPUT_LENGTH) return;
 
   const message = {
-    id: Date.now().toString(),
+    id: generateMessageId(),
     text,
     timestamp: new Date().toISOString(),
   };
@@ -100,7 +118,7 @@ function sendMessage() {
 
 function autoResize() {
   messageInput.style.height = 'auto';
-  messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + 'px';
+  messageInput.style.height = Math.min(messageInput.scrollHeight, MAX_TEXTAREA_HEIGHT) + 'px';
 }
 
 // --- Event listeners ---
@@ -122,12 +140,9 @@ btnClear.addEventListener('click', () => {
   renderAll([]);
 });
 
-// Mic is not yet connected - show a tooltip hint
-btnMic.classList.add('disabled');
-btnMic.addEventListener('click', () => {
-  // TODO: connect to Speech-to-Text API
-  alert('Hlasový vstup bude k dispozici brzy.');
-});
+// Mic is not yet connected - disable the button with a tooltip hint
+btnMic.disabled = true;
+btnMic.setAttribute('title', 'Hlasový vstup bude k dispozici brzy.');
 
 // --- Init ---
 
