@@ -4,7 +4,7 @@ const MAX_INPUT_LENGTH = 2000;
 const MAX_TEXTAREA_HEIGHT = 140;
 
 // Deepgram – vlož svůj API klíč:
-const DEEPGRAM_API_KEY = 'YOUR_DEEPGRAM_API_KEY';
+const DEEPGRAM_API_KEY = 'fc9cc323c2049afcf2b395ebb244a0cfb2f1c489';
 
 const DEEPGRAM_WS_URL =
   'wss://api.deepgram.com/v1/listen?' +
