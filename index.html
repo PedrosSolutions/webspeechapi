@@ -18,13 +18,16 @@
     </main>
 
     <footer class="input-bar">
-      <textarea
-        id="messageInput"
-        class="message-input"
-        placeholder="Napište zprávu..."
-        rows="1"
-        maxlength="2000"
-      ></textarea>
+      <div class="input-wrap">
+        <textarea
+          id="messageInput"
+          class="message-input"
+          placeholder="Napište zprávu..."
+          rows="1"
+          maxlength="2000"
+        ></textarea>
+        <canvas id="waveform" class="waveform" aria-hidden="true"></canvas>
+      </div>
       <button class="btn-mic" id="btnMic" title="Hlasový vstup (brzy)" aria-label="Hlasový vstup">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>

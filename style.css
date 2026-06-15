@@ -139,8 +139,30 @@ body {
   flex-shrink: 0;
 }
 
-.message-input {
+.input-wrap {
+  position: relative;
   flex: 1;
+  display: flex;
+}
+
+/* Waveform overlay – během nahrávání překryje input, vypadá jako uvnitř něj */
+.waveform {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  display: none;
+  pointer-events: none;
+}
+
+.waveform.active {
+  display: block;
+}
+
+.message-input {
+  width: 100%;
   resize: none;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);

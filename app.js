@@ -24,6 +24,7 @@ const messageInput = document.getElementById('messageInput');
 const btnSend      = document.getElementById('btnSend');
 const btnMic       = document.getElementById('btnMic');
 const btnClear     = document.getElementById('btnClear');
+const waveformCanvas = document.getElementById('waveform');
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 function loadMessages() {
@@ -145,6 +146,86 @@ const recorder = {
   mimeType: '',
 };
 
+// ─── Waveform vizualizace (Web Audio AnalyserNode + canvas) ──────────────────
+const waveform = {
+  audioCtx: null,
+  analyser: null,
+  source: null,
+  rafId: null,
+  data: null,
+};
+
+function startWaveform(micStream) {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;   // bez Web Audio prostě nekreslíme – nahrávání funguje dál
+  try {
+    waveform.audioCtx = new Ctx();
+    waveform.analyser = waveform.audioCtx.createAnalyser();
+    waveform.analyser.fftSize = 2048;
+    waveform.source = waveform.audioCtx.createMediaStreamSource(micStream);
+    waveform.source.connect(waveform.analyser);
+    waveform.data = new Uint8Array(waveform.analyser.fftSize);
+    // Safari/iOS někdy startuje context jako 'suspended'
+    if (waveform.audioCtx.state === 'suspended') waveform.audioCtx.resume().catch(() => {});
+  } catch (err) {
+    console.error('Waveform init failed:', err);
+    return;
+  }
+
+  // Canvas rozlišení = jeho zobrazená velikost × devicePixelRatio (ostré na retině)
+  const dpr = window.devicePixelRatio || 1;
+  const rect = waveformCanvas.getBoundingClientRect();
+  waveformCanvas.width  = Math.max(1, Math.round(rect.width  * dpr));
+  waveformCanvas.height = Math.max(1, Math.round(rect.height * dpr));
+  waveformCanvas.classList.add('active');
+
+  const ctx = waveformCanvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const w = rect.width;
+  const h = rect.height;
+
+  function draw() {
+    waveform.rafId = requestAnimationFrame(draw);
+    waveform.analyser.getByteTimeDomainData(waveform.data);
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#dc2626';   // stejná červená jako recording stav
+    ctx.beginPath();
+
+    const sliceWidth = w / waveform.data.length;
+    let x = 0;
+    for (let i = 0; i < waveform.data.length; i++) {
+      const v = waveform.data[i] / 128.0;   // 0..2, klid = 1
+      const y = (v * h) / 2;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+      x += sliceWidth;
+    }
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+  }
+  draw();
+}
+
+function stopWaveform() {
+  if (waveform.rafId !== null) {
+    cancelAnimationFrame(waveform.rafId);
+    waveform.rafId = null;
+  }
+  if (waveform.source) {
+    try { waveform.source.disconnect(); } catch { /* už odpojeno */ }
+    waveform.source = null;
+  }
+  if (waveform.audioCtx) {
+    waveform.audioCtx.close().catch(() => {});
+    waveform.audioCtx = null;
+  }
+  waveform.analyser = null;
+  waveform.data = null;
+  waveformCanvas.classList.remove('active');
+}
+
 function setMicState(state, title) {
   recorder.state = state;
   // 'starting' sdílí vizuál s 'recording' → uživatel vidí okamžitou odezvu při kliku
@@ -197,6 +278,7 @@ async function startRecording() {
 
   recorder.mediaRecorder.start();   // bez timeslice – jeden blok na konci
   setMicState('recording', 'Nahrávám – klikni pro zastavení');
+  startWaveform(recorder.micStream);   // živá vizualizace naslouchání
 
   recorder.autoStopTimer = setTimeout(() => {
     if (recorder.state === 'recording') stopRecording();
@@ -212,6 +294,7 @@ function stopRecording() {
   }
   if (recorder.state !== 'recording') return;
   setMicState('processing', 'Zpracovávám…');
+  stopWaveform();   // skryj vizualizaci, ukáže se spinner
   clearTimeout(recorder.autoStopTimer);
   recorder.autoStopTimer = null;
   // mediaRecorder.stop() spustí 'stop' event → onRecorderStop
@@ -280,6 +363,7 @@ function resetRecorder({ keepErrorState = false } = {}) {
     recorder.micStream.getTracks().forEach(t => t.stop());
     recorder.micStream = null;
   }
+  stopWaveform();   // pojistka pro cesty, které neprošly stopRecording (start cancel, error)
   if (!keepErrorState) {
     setMicState('idle', 'Hlasový vstup');
   }
