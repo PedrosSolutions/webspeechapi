@@ -6,6 +6,17 @@ const MAX_TEXTAREA_HEIGHT = 140;
 // Deepgram – vlož svůj API klíč:
 const DEEPGRAM_API_KEY = 'fc9cc323c2049afcf2b395ebb244a0cfb2f1c489';
 
+// Deepgram pre-recorded REST endpoint
+const DEEPGRAM_REST_URL =
+  'https://api.deepgram.com/v1/listen?' +
+  new URLSearchParams({
+    model:        'nova-3',
+    language:     'cs',
+    smart_format: 'true',
+  }).toString();
+
+const MAX_RECORDING_MS = 60000;   // 60s auto-stop pojistka
+
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const chatHistory  = document.getElementById('chatHistory');
 const emptyState   = document.getElementById('emptyState');
@@ -122,6 +133,27 @@ function sendMessage(source = 'text') {
 function autoResize() {
   messageInput.style.height = 'auto';
   messageInput.style.height = Math.min(messageInput.scrollHeight, MAX_TEXTAREA_HEIGHT) + 'px';
+}
+
+// ─── Mic / Recorder (V2: record → send) ─────────────────────────────────────
+// Stavový automat: 'idle' | 'starting' | 'recording' | 'processing' | 'error'
+const recorder = {
+  state: 'idle',
+  mediaRecorder: null,
+  micStream: null,
+  chunks: [],
+  autoStopTimer: null,
+  mimeType: '',
+};
+
+function setMicState(state, title) {
+  recorder.state = state;
+  // 'starting' sdílí vizuál s 'recording' → uživatel vidí okamžitou odezvu při kliku
+  btnMic.dataset.state = (state === 'recording' || state === 'starting') ? 'recording'
+                       : state === 'processing' ? 'processing'
+                       : state === 'error' ? 'error'
+                       : 'idle';
+  btnMic.title = title;
 }
 
 // ─── Send & clear ─────────────────────────────────────────────────────────────
