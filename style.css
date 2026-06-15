@@ -207,6 +207,22 @@ body {
   border-color: #ea580c;
 }
 
+/* Processing – přepis probíhá, spinner */
+.btn-mic[data-state="processing"] {
+  background: var(--bg);
+  color: var(--mic);
+  border-color: var(--border);
+  cursor: progress;
+}
+
+.btn-mic[data-state="processing"] svg {
+  animation: mic-spin 0.8s linear infinite;
+}
+
+@keyframes mic-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Interim – textarea border signalizuje živý přepis */
 .message-input.interim {
   border-color: #dc2626;

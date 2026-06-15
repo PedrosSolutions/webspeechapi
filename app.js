@@ -124,7 +124,6 @@ function sendMessage(source = 'text') {
   appendBubble(message);
 
   messageInput.value = '';
-  messageInput.classList.remove('interim');
   autoResize();
   messageInput.focus();
 }
@@ -296,14 +295,22 @@ btnMic.addEventListener('click', () => {
 });
 
 // ─── Send & clear ─────────────────────────────────────────────────────────────
-btnSend.addEventListener('click', () => sendMessage('text'));
+btnSend.addEventListener('click', () => {
+  if (recorder.state === 'recording' || recorder.state === 'starting') {
+    stopRecording();   // přepis dorazí async, uživatel pak odešle znovu
+    return;
+  }
+  sendMessage('text');
+});
 
 messageInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    const wasRecording = isRecording;
-    if (wasRecording) stopRecording();
-    sendMessage(wasRecording ? 'voice' : 'text');
+    if (recorder.state === 'recording' || recorder.state === 'starting') {
+      stopRecording();   // počkej na přepis, pak Enter znovu
+      return;
+    }
+    sendMessage('text');
   }
 });
 
