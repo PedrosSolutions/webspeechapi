@@ -204,6 +204,97 @@ async function startRecording() {
   }, MAX_RECORDING_MS);
 }
 
+function stopRecording() {
+  if (recorder.state === 'starting') {
+    // Ještě neběží MediaRecorder – jen zruš a ukliď.
+    if (recorder.micStream) recorder.micStream.getTracks().forEach(t => t.stop());
+    resetRecorder();
+    return;
+  }
+  if (recorder.state !== 'recording') return;
+  setMicState('processing', 'Zpracovávám…');
+  clearTimeout(recorder.autoStopTimer);
+  recorder.autoStopTimer = null;
+  // mediaRecorder.stop() spustí 'stop' event → onRecorderStop
+  if (recorder.mediaRecorder && recorder.mediaRecorder.state !== 'inactive') {
+    recorder.mediaRecorder.stop();
+  } else {
+    onRecorderStop();
+  }
+}
+
+async function onRecorderStop() {
+  // Uvolni mikrofon hned po zastavení nahrávání
+  if (recorder.micStream) {
+    recorder.micStream.getTracks().forEach(t => t.stop());
+    recorder.micStream = null;
+  }
+
+  const chunks = recorder.chunks;
+  recorder.chunks = [];
+
+  if (chunks.length === 0) {
+    setMicState('error', 'Nic se nenahrálo');
+    resetRecorder({ keepErrorState: true });
+    return;
+  }
+
+  const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+
+  try {
+    const text = await transcribeBlob(blob);
+    if (text) {
+      const base = messageInput.value.trim();
+      messageInput.value = base ? base + ' ' + text : text;
+      autoResize();
+    }
+    resetRecorder();
+    messageInput.focus();
+  } catch (err) {
+    setMicState('error', 'Přepis selhal: ' + err.message);
+    resetRecorder({ keepErrorState: true });
+  }
+}
+
+async function transcribeBlob(blob) {
+  const res = await fetch(DEEPGRAM_REST_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Token ' + DEEPGRAM_API_KEY,
+      'Content-Type': blob.type || 'audio/webm',
+    },
+    body: blob,
+  });
+  if (!res.ok) {
+    throw new Error('HTTP ' + res.status);
+  }
+  const data = await res.json();
+  return data?.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? '';
+}
+
+function resetRecorder({ keepErrorState = false } = {}) {
+  clearTimeout(recorder.autoStopTimer);
+  recorder.autoStopTimer = null;
+  recorder.mediaRecorder = null;
+  recorder.chunks = [];
+  if (recorder.micStream) {
+    recorder.micStream.getTracks().forEach(t => t.stop());
+    recorder.micStream = null;
+  }
+  if (!keepErrorState) {
+    setMicState('idle', 'Hlasový vstup');
+  }
+}
+
+btnMic.addEventListener('click', () => {
+  if (recorder.state === 'recording' || recorder.state === 'starting') {
+    stopRecording();
+  } else if (recorder.state === 'idle' || recorder.state === 'error') {
+    startRecording();
+  }
+  // 'processing' → klik ignorován (probíhá přepis)
+});
+
 // ─── Send & clear ─────────────────────────────────────────────────────────────
 btnSend.addEventListener('click', () => sendMessage('text'));
 
