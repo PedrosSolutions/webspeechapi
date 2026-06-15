@@ -297,14 +297,22 @@ btnMic.addEventListener('click', () => {
 });
 
 // ─── Send & clear ─────────────────────────────────────────────────────────────
-btnSend.addEventListener('click', () => sendMessage('text'));
+btnSend.addEventListener('click', () => {
+  if (stream.state === 'recording' || stream.state === 'starting') {
+    stopRecording();   // finální transkript dorazí async, pak uživatel odešle
+    return;
+  }
+  sendMessage('text');
+});
 
 messageInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    const wasRecording = isRecording;
-    if (wasRecording) stopRecording();
-    sendMessage(wasRecording ? 'voice' : 'text');
+    if (stream.state === 'recording' || stream.state === 'starting') {
+      stopRecording();   // počkej na finální transkript, pak Enter znovu
+      return;
+    }
+    sendMessage('text');
   }
 });
 
