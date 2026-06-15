@@ -136,126 +136,164 @@ function autoResize() {
   messageInput.style.height = Math.min(messageInput.scrollHeight, MAX_TEXTAREA_HEIGHT) + 'px';
 }
 
-// ─── Mic / Deepgram ───────────────────────────────────────────────────────────
-let isRecording   = false;
-let dgSocket      = null;   // WebSocket
-let mediaRecorder = null;
-let micStream     = null;
-let confirmedText = '';     // finalized transcript segments
+// ─── Mic / Deepgram (V1: streaming) ─────────────────────────────────────────
+// Stavový automat: 'idle' | 'starting' | 'recording' | 'stopping' | 'error'
+// Ochrana proti překrytí sessions: každá session má unikátní id; callbacky
+// ignorují eventy z neaktuální session.
+const stream = {
+  state: 'idle',
+  id: 0,            // id aktuální session
+  dgSocket: null,
+  mediaRecorder: null,
+  micStream: null,
+  confirmedText: '',
+  autoStopTimer: null,
+};
 
 function setMicState(state, title) {
-  btnMic.dataset.state = state;  // 'idle' | 'recording' | 'error'
+  stream.state = state;
+  // 'starting'/'stopping' sdílí vizuál s 'recording' → okamžitá odezva při kliku
+  btnMic.dataset.state =
+    (state === 'recording' || state === 'starting' || state === 'stopping') ? 'recording'
+    : state === 'error' ? 'error'
+    : 'idle';
   btnMic.title = title;
 }
 
 async function startRecording() {
-  // 1) Request microphone
+  if (stream.state !== 'idle' && stream.state !== 'error') return;
+  const sessionId = ++stream.id;          // nová session
+  setMicState('starting', 'Spouštím mikrofon…');
+  stream.confirmedText = messageInput.value.trim();
+
+  let micStream;
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch (err) {
+    if (sessionId !== stream.id) return;  // mezitím nová/zrušená session
     setMicState('error', 'Mikrofon nedostupný: ' + err.message);
     return;
   }
 
-  // 2) Open Deepgram WebSocket (auth via subprotocol token)
-  dgSocket = new WebSocket(DEEPGRAM_WS_URL, ['token', DEEPGRAM_API_KEY]);
+  if (sessionId !== stream.id || stream.state !== 'starting') {
+    micStream.getTracks().forEach(t => t.stop());  // uživatel mezitím stopnul
+    return;
+  }
+  stream.micStream = micStream;
+
+  const dgSocket = new WebSocket(DEEPGRAM_WS_URL, ['token', DEEPGRAM_API_KEY]);
   dgSocket.binaryType = 'arraybuffer';
+  stream.dgSocket = dgSocket;
 
   dgSocket.addEventListener('open', () => {
-    // 3) Start MediaRecorder once WebSocket is open
+    if (sessionId !== stream.id) { dgSocket.close(); return; }
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'
       : 'audio/webm';
-    mediaRecorder = new MediaRecorder(micStream, { mimeType });
-
-    mediaRecorder.addEventListener('dataavailable', (e) => {
+    const mr = new MediaRecorder(micStream, { mimeType });
+    stream.mediaRecorder = mr;
+    mr.addEventListener('dataavailable', (e) => {
       if (e.data.size > 0 && dgSocket.readyState === WebSocket.OPEN) {
         dgSocket.send(e.data);
       }
     });
-
-    mediaRecorder.start(250);  // chunk každých 250 ms
-    isRecording = true;
+    mr.start(250);
     setMicState('recording', 'Nahrávám – klikni pro zastavení');
-    confirmedText = messageInput.value.trim();  // zachovej existující text
+    stream.autoStopTimer = setTimeout(() => {
+      if (sessionId === stream.id && stream.state === 'recording') stopRecording();
+    }, MAX_RECORDING_MS);
   });
 
-  // 4) Handle transcripts
   dgSocket.addEventListener('message', (e) => {
+    if (sessionId !== stream.id) return;
     let data;
     try { data = JSON.parse(e.data); } catch { return; }
-
-    const transcript = data?.channel?.alternatives?.[0]?.transcript ?? '';
-    const isFinal    = data?.is_final    ?? false;
+    const transcript  = data?.channel?.alternatives?.[0]?.transcript ?? '';
+    const isFinal     = data?.is_final     ?? false;
     const speechFinal = data?.speech_final ?? false;
-
     if (!transcript && !isFinal) return;
 
     if (speechFinal || isFinal) {
-      // Finální segment – přidej k potvrzenému textu
       if (transcript) {
-        confirmedText = confirmedText
-          ? confirmedText + ' ' + transcript
+        stream.confirmedText = stream.confirmedText
+          ? stream.confirmedText + ' ' + transcript
           : transcript;
       }
-      messageInput.value = confirmedText;
+      messageInput.value = stream.confirmedText;
       messageInput.classList.remove('interim');
     } else {
-      // Interim – ukaž živý náhled (potvrzenéText + aktuální interim)
-      const preview = confirmedText
-        ? confirmedText + (transcript ? ' ' + transcript : '')
+      const preview = stream.confirmedText
+        ? stream.confirmedText + (transcript ? ' ' + transcript : '')
         : transcript;
       messageInput.value = preview;
       messageInput.classList.toggle('interim', Boolean(transcript));
     }
-
     autoResize();
     scrollToBottom();
   });
 
   dgSocket.addEventListener('close', () => {
-    _cleanupRecording();
+    if (sessionId !== stream.id) return;
+    resetRecorder();
   });
 
   dgSocket.addEventListener('error', () => {
+    if (sessionId !== stream.id) return;
     setMicState('error', 'Chyba připojení k Deepgram');
-    _cleanupRecording();
+    resetRecorder({ keepErrorState: true });
   });
 }
 
 function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
+  if (stream.state === 'starting') {
+    stream.id++;   // invaliduj běžící start
+    if (stream.micStream) stream.micStream.getTracks().forEach(t => t.stop());
+    resetRecorder();
+    return;
   }
-  if (micStream) {
-    micStream.getTracks().forEach(t => t.stop());
-    micStream = null;
+  if (stream.state !== 'recording') return;
+  setMicState('stopping', 'Dokončuji…');
+  clearTimeout(stream.autoStopTimer);
+  stream.autoStopTimer = null;
+
+  if (stream.mediaRecorder && stream.mediaRecorder.state !== 'inactive') {
+    stream.mediaRecorder.stop();
   }
-  if (dgSocket && dgSocket.readyState === WebSocket.OPEN) {
-    // Pošli CloseStream zprávu aby Deepgram odeslal zbývající finální transkript
-    dgSocket.send(JSON.stringify({ type: 'CloseStream' }));
-    // Socket se zavře sám přes 'close' event → _cleanupRecording()
+  if (stream.micStream) {
+    stream.micStream.getTracks().forEach(t => t.stop());
+    stream.micStream = null;
+  }
+  if (stream.dgSocket && stream.dgSocket.readyState === WebSocket.OPEN) {
+    // CloseStream → Deepgram pošle zbývající finální transkript, pak 'close' → resetRecorder
+    stream.dgSocket.send(JSON.stringify({ type: 'CloseStream' }));
   } else {
-    _cleanupRecording();
+    resetRecorder();
   }
 }
 
-function _cleanupRecording() {
-  isRecording   = false;
-  mediaRecorder = null;
-  dgSocket      = null;
-  micStream     = null;
-  confirmedText = '';
+function resetRecorder({ keepErrorState = false } = {}) {
+  clearTimeout(stream.autoStopTimer);
+  stream.autoStopTimer = null;
+  stream.mediaRecorder = null;
+  if (stream.micStream) {
+    stream.micStream.getTracks().forEach(t => t.stop());
+    stream.micStream = null;
+  }
+  stream.dgSocket = null;
+  stream.confirmedText = '';
   messageInput.classList.remove('interim');
-  setMicState('idle', 'Hlasový vstup');
+  if (!keepErrorState) {
+    setMicState('idle', 'Hlasový vstup');
+  }
 }
 
 btnMic.addEventListener('click', () => {
-  if (isRecording) {
+  if (stream.state === 'recording' || stream.state === 'starting') {
     stopRecording();
-  } else {
+  } else if (stream.state === 'idle' || stream.state === 'error') {
     startRecording();
   }
+  // 'stopping' → klik ignorován
 });
 
 // ─── Send & clear ─────────────────────────────────────────────────────────────
