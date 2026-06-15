@@ -137,9 +137,13 @@ function autoResize() {
 }
 
 // ─── Mic / Deepgram (V1: streaming) ─────────────────────────────────────────
-// Stavový automat: 'idle' | 'starting' | 'recording' | 'stopping' | 'error'
+// Stavový automat: 'idle' | 'starting' | 'recording' | 'stopping' | 'finishing' | 'error'
+//   'stopping'  = uživatel zastavil mikrofon (jen ukončit, neodesílat)
+//   'finishing' = uživatel dal Odeslat za běhu → čekáme na finální přepis, pak auto-odešleme
 // Ochrana proti překrytí sessions: každá session má unikátní id; callbacky
 // ignorují eventy z neaktuální session.
+const FINISH_WAIT_MS = 2000;   // max čekání na finální transkript při Odeslat za běhu
+
 const stream = {
   state: 'idle',
   id: 0,            // id aktuální session
@@ -148,16 +152,25 @@ const stream = {
   micStream: null,
   confirmedText: '',
   autoStopTimer: null,
+  finishTimer: null,
+  pendingSend: false,   // true když po dokončení máme rovnou odeslat
 };
 
 function setMicState(state, title) {
   stream.state = state;
-  // 'starting'/'stopping' sdílí vizuál s 'recording' → okamžitá odezva při kliku
+  // 'starting'/'stopping'/'finishing' sdílí vizuál s 'recording' → okamžitá odezva
   btnMic.dataset.state =
-    (state === 'recording' || state === 'starting' || state === 'stopping') ? 'recording'
+    (state === 'recording' || state === 'starting' || state === 'stopping' || state === 'finishing') ? 'recording'
     : state === 'error' ? 'error'
     : 'idle';
   btnMic.title = title;
+}
+
+// Během 'finishing' zamkni obě tlačítka + spinner na Odeslat (zabrání zběsilému klikání)
+function setSendingUI(active) {
+  btnSend.disabled = active;
+  btnMic.disabled  = active;
+  btnSend.dataset.state = active ? 'sending' : '';
 }
 
 async function startRecording() {
@@ -244,7 +257,7 @@ async function startRecording() {
   });
 }
 
-function stopRecording() {
+function stopRecording({ thenSend = false } = {}) {
   if (stream.state === 'starting') {
     stream.id++;   // invaliduj běžící start
     if (stream.micStream) stream.micStream.getTracks().forEach(t => t.stop());
@@ -252,7 +265,19 @@ function stopRecording() {
     return;
   }
   if (stream.state !== 'recording') return;
-  setMicState('stopping', 'Dokončuji…');
+
+  stream.pendingSend = thenSend;
+  if (thenSend) {
+    setMicState('finishing', 'Odesílám…');
+    setSendingUI(true);
+    // Pojistka: i kdyby finální transkript / close nedorazil, po 2s odešli co je
+    stream.finishTimer = setTimeout(() => {
+      if (stream.state === 'finishing') resetRecorder();
+    }, FINISH_WAIT_MS);
+  } else {
+    setMicState('stopping', 'Dokončuji…');
+  }
+
   clearTimeout(stream.autoStopTimer);
   stream.autoStopTimer = null;
 
@@ -273,7 +298,9 @@ function stopRecording() {
 
 function resetRecorder({ keepErrorState = false } = {}) {
   clearTimeout(stream.autoStopTimer);
+  clearTimeout(stream.finishTimer);
   stream.autoStopTimer = null;
+  stream.finishTimer = null;
   stream.mediaRecorder = null;
   if (stream.micStream) {
     stream.micStream.getTracks().forEach(t => t.stop());
@@ -282,8 +309,16 @@ function resetRecorder({ keepErrorState = false } = {}) {
   stream.dgSocket = null;
   stream.confirmedText = '';
   messageInput.classList.remove('interim');
+
+  const shouldSend = stream.pendingSend;
+  stream.pendingSend = false;
+  setSendingUI(false);
+
   if (!keepErrorState) {
     setMicState('idle', 'Hlasový vstup');
+  }
+  if (shouldSend) {
+    sendMessage('voice');   // finální (nebo nejlepší dostupný) text už je v inputu
   }
 }
 
@@ -298,8 +333,12 @@ btnMic.addEventListener('click', () => {
 
 // ─── Send & clear ─────────────────────────────────────────────────────────────
 btnSend.addEventListener('click', () => {
-  if (stream.state === 'recording' || stream.state === 'starting') {
-    stopRecording();   // finální transkript dorazí async, pak uživatel odešle
+  if (stream.state === 'recording') {
+    stopRecording({ thenSend: true });   // stop → počkej na finální přepis → auto-odešli
+    return;
+  }
+  if (stream.state === 'starting') {
+    stopRecording();   // ještě nic nenahráno – jen zruš start
     return;
   }
   sendMessage('text');
@@ -308,8 +347,12 @@ btnSend.addEventListener('click', () => {
 messageInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    if (stream.state === 'recording' || stream.state === 'starting') {
-      stopRecording();   // počkej na finální transkript, pak Enter znovu
+    if (stream.state === 'recording') {
+      stopRecording({ thenSend: true });
+      return;
+    }
+    if (stream.state === 'starting') {
+      stopRecording();
       return;
     }
     sendMessage('text');

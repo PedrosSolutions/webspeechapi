@@ -227,6 +227,19 @@ body {
   cursor: not-allowed;
 }
 
+/* Odesílání po hlasovém vstupu – spinner místo ikony */
+.btn-send[data-state="sending"] {
+  opacity: 1;
+}
+
+.btn-send[data-state="sending"] svg {
+  animation: send-spin 0.7s linear infinite;
+}
+
+@keyframes send-spin {
+  to { transform: rotate(360deg); }
+}
+
 .btn-mic svg,
 .btn-send svg {
   width: 18px;
