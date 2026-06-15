@@ -16,6 +16,8 @@ const DEEPGRAM_WS_URL =
     endpointing:      '300',   // 300 ms ticha → speech_final
   }).toString();
 
+const MAX_RECORDING_MS = 60000;   // 60s auto-stop pojistka
+
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const chatHistory  = document.getElementById('chatHistory');
 const emptyState   = document.getElementById('emptyState');
