@@ -156,6 +156,54 @@ function setMicState(state, title) {
   btnMic.title = title;
 }
 
+async function startRecording() {
+  // Guard: jen z idle/error lze startovat. Stav nastavíme SYNCHRONNĚ.
+  if (recorder.state !== 'idle' && recorder.state !== 'error') return;
+  setMicState('starting', 'Spouštím mikrofon…');
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch (err) {
+    setMicState('error', 'Mikrofon nedostupný: ' + err.message);
+    return;
+  }
+
+  // Mezi klikem a tímto bodem mohl uživatel stisknout stop → respektuj to.
+  if (recorder.state !== 'starting') {
+    stream.getTracks().forEach(t => t.stop());
+    return;
+  }
+
+  recorder.micStream = stream;
+  recorder.chunks = [];
+  recorder.mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+
+  try {
+    recorder.mediaRecorder = recorder.mimeType
+      ? new MediaRecorder(stream, { mimeType: recorder.mimeType })
+      : new MediaRecorder(stream);
+  } catch (err) {
+    stream.getTracks().forEach(t => t.stop());
+    setMicState('error', 'Nahrávání nepodporováno: ' + err.message);
+    return;
+  }
+
+  recorder.mediaRecorder.addEventListener('dataavailable', (e) => {
+    if (e.data && e.data.size > 0) recorder.chunks.push(e.data);
+  });
+  recorder.mediaRecorder.addEventListener('stop', onRecorderStop);
+
+  recorder.mediaRecorder.start();   // bez timeslice – jeden blok na konci
+  setMicState('recording', 'Nahrávám – klikni pro zastavení');
+
+  recorder.autoStopTimer = setTimeout(() => {
+    if (recorder.state === 'recording') stopRecording();
+  }, MAX_RECORDING_MS);
+}
+
 // ─── Send & clear ─────────────────────────────────────────────────────────────
 btnSend.addEventListener('click', () => sendMessage('text'));
 
